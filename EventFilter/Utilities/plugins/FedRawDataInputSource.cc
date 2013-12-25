@@ -49,7 +49,7 @@ FedRawDataInputSource::FedRawDataInputSource(edm::ParameterSet const& pset,
   fileStream_(0),
   eventID_(),
   currentLumiSection_(0),
-  currentInputJson_(""),
+  nextIndex_(0),
   currentInputEventCount_(0),
   eorFileSeen_(false),
   dataBuffer_(new unsigned char[1024 * 1024 * eventChunkSize_]),
@@ -61,6 +61,9 @@ FedRawDataInputSource::FedRawDataInputSource(edm::ParameterSet const& pset,
   edm::LogInfo("FedRawDataInputSource") << "test mode: "
                                         << testModeNoBuilderUnit_ << ", read-ahead chunk size: " << eventChunkSize_
                                         << " on host " << thishost;
+
+  buWorkingDir_ = buInputDir_ / thishost;
+  boost::filesystem::create_directories(buWorkingDir_);
 
   daqProvenanceHelper_.daqInit(productRegistryUpdate(), processHistoryRegistryForUpdate());
   setNewRun();
@@ -193,8 +196,8 @@ int FedRawDataInputSource::readNextChunkIntoBuffer()
   int fileStatus = 100; //file is healthy for now 
   if (eofReached()){
     closeCurrentFile();
-    fileStatus = openNextFile(); // this can now return even if there is 
-                                 //no file only temporarily
+    fileStatus = searchForNextFile(); // this can now return even if there is
+                                      // no file only temporarily
     if(fileStatus==0) return -100; //should only happen when requesting the next event header and the run is over
   }
   if(fileStatus==100){ //either file was not over or a new one was opened
@@ -244,20 +247,6 @@ void FedRawDataInputSource::closeCurrentFile()
       renameToNextFree();
     }
   }
-}
-
-int FedRawDataInputSource::openNextFile()
-{
-  int nextfile = -1;
-  while((nextfile = searchForNextFile())<0){
-    if(eorFileSeen_)
-      return 0;
-    else{
-      edm::LogInfo("FedRawDataInputSource") << "No file for me... sleep and try again..." << std::endl;
-      usleep(100000);
-    }
-  }
-  return nextfile;
 }
 
 void FedRawDataInputSource::read(edm::EventPrincipal& eventPrincipal) 
@@ -311,37 +300,68 @@ int FedRawDataInputSource::searchForNextFile()
 {
   int retval = -1;
   if(currentInputEventCount_!=0){
-    throw cms::Exception("RuntimeError") << "Went to search for next file but according to BU more events in " 
-                                         << currentInputJson_.string();
+    throw cms::Exception("RuntimeError") << "Went to search for next file but according to BU there are "
+                                         << currentInputEventCount_ << " more events";
   }
-  
-  std::string nextFile;
-  uint32_t ls;
 
-  edm::LogInfo("FedRawDataInputSource") << "Asking for next file... to the DaqDirector";
-  evf::FastMonitoringService*fms = (evf::FastMonitoringService *) (edm::Service<evf::MicroStateService>().operator->());
+  evf::FastMonitoringService* fms =
+    (evf::FastMonitoringService*) (edm::Service<evf::MicroStateService>().operator->());
   fms->startedLookingForFile();
-  bool fileIsOKToGrab = edm::Service<evf::EvFDaqDirector>()->updateFuLock(ls,nextFile,eorFileSeen_);
 
-  if (fileIsOKToGrab) {
+  do {
+    const std::string nextJsonFile =
+      edm::Service<evf::EvFDaqDirector>()->getOpenJsonFilePath(currentLumiSection_,nextIndex_);
 
-    edm::LogInfo("FedRawDataInputSource") << "The director says to grab: " << nextFile;
+    struct stat buf;
+    const bool jsonExists = (stat(nextJsonFile.c_str(), &buf) == 0);
 
-    fms->stoppedLookingForFile();
+    if (jsonExists) {
+      // Try to rename dat file
+      try {
+        const boost::filesystem::path nextRawFile =
+          edm::Service<evf::EvFDaqDirector>()->getOpenRawFilePath(currentLumiSection_,nextIndex_);
+        const boost::filesystem::path myRawFile = buWorkingDir_ / nextRawFile.filename();
+        boost::filesystem::rename(nextRawFile,myRawFile);
+        edm::LogInfo("FedRawDataInputSource") << "Grabbed file " << nextRawFile
+                                              << " as " << myRawFile;
+        openDataFile(myRawFile.string());
+        fms->stoppedLookingForFile();
+        assert( grabNextJsonFile(nextJsonFile) );
+        retval = 100;
+      }
+      catch(boost::filesystem::filesystem_error) {
+        // dat file is not available, move on
+        ++nextIndex_;
+      }
+      catch(cms::Exception) {
+        // renamed dat file is not readable, move on
+        ++nextIndex_;
+      }
+    }
+    else {
+      // check if there's an EoLS file for the current LS
+      const std::string eolsFile =
+        edm::Service<evf::EvFDaqDirector>()->getEoLSFilePathOnBU(currentLumiSection_);
 
-    boost::filesystem::path jsonFile(nextFile);
-    jsonFile.replace_extension(".jsn");
-    assert( grabNextJsonFile(jsonFile) );
-    openDataFile(nextFile);
-    retval = 100;
-  } else {
-    edm::LogInfo("FedRawDataInputSource") << "The DAQ Director has nothing for me! ";
-  }
+      struct stat buf;
+      const bool eolsExists = (stat(eolsFile.c_str(), &buf) == 0);
 
-  while( getLSFromFilename_ && ls > currentLumiSection_ ) {
-    maybeOpenNewLumiSection(ls);
-    retval = 1;
-  }
+      if (eolsExists) {
+        if (getLSFromFilename_) {
+          maybeOpenNewLumiSection(currentLumiSection_+1);
+        }
+        else {
+          ++currentLumiSection_;
+        }
+        nextIndex_ = 0;
+        retval = 1;
+      }
+      else {
+        edm::LogInfo("FedRawDataInputSource") << "No file for me... sleep and try again..." << std::endl;
+        usleep(100000);
+      }
+    }
+  } while ( retval < 0 );
 
   return retval;
 }
@@ -361,15 +381,8 @@ bool FedRawDataInputSource::grabNextJsonFile(boost::filesystem::path const& json
     edm::LogInfo("FedRawDataInputSource") << " JSON rename " << jsonSourcePath << " to "
                                           << jsonDestPath;
 
-    if ( testModeNoBuilderUnit_ )
-      boost::filesystem::copy(jsonSourcePath,jsonDestPath);
-    else {
-      //boost::filesystem::rename(jsonSourcePath,jsonDestPath);
-      boost::filesystem::copy(jsonSourcePath,jsonDestPath);
-      boost::filesystem::remove(jsonSourcePath);
-    }
+    boost::filesystem::copy(jsonSourcePath,jsonDestPath);
 
-    currentInputJson_ = jsonDestPath; // store location for later deletion.
     boost::filesystem::ifstream ij(jsonDestPath);
     Json::Value deserializeRoot;
     DataPoint dp;

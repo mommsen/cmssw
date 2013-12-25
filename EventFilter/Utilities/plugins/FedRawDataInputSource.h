@@ -41,7 +41,6 @@ private:
   int cacheNextEvent();
   edm::Timestamp fillFEDRawDataCollection(std::auto_ptr<FEDRawDataCollection>&) const;
   void closeCurrentFile();
-  int openNextFile();
   int searchForNextFile();
   bool grabNextJsonFile(boost::filesystem::path const&);
   void openDataFile(std::string const&);
@@ -58,8 +57,9 @@ private:
   
   const edm::RunNumber_t runNumber_;
 
-  const std::string buInputDir_;
-  const std::string fuOutputDir_;
+  const boost::filesystem::path buInputDir_;
+  const boost::filesystem::path fuOutputDir_;
+  boost::filesystem::path buWorkingDir_;
 
   const edm::DaqProvenanceHelper daqProvenanceHelper_;
 
@@ -70,7 +70,7 @@ private:
   edm::EventID eventID_;
 
   unsigned int currentLumiSection_;
-  boost::filesystem::path currentInputJson_;
+  unsigned int nextIndex_;
   unsigned int currentInputEventCount_;
 
   bool eorFileSeen_;

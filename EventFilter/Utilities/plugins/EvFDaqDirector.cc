@@ -258,6 +258,10 @@ namespace evf {
     return bu_run_dir_ + "/open/" + inputFileNameStem(ls, index) + ".raw";
   }
 
+  std::string EvFDaqDirector::getOpenJsonFilePath(const unsigned int ls, const unsigned int index) const {
+    return bu_run_dir_ + "/open/" + inputFileNameStem(ls, index) + ".jsn";
+  }
+
   std::string EvFDaqDirector::getOpenDatFilePath(const unsigned int ls, std::string const& stream) const {
     return run_dir_ + "/open/" + outputFileNameStem(ls,stream) + ".dat";
   }
