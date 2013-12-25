@@ -43,15 +43,12 @@ FedRawDataInputSource::FedRawDataInputSource(edm::ParameterSet const& pset,
   verifyAdler32_(pset.getUntrackedParameter<bool> ("verifyAdler32", true)),
   testModeNoBuilderUnit_(edm::Service<evf::EvFDaqDirector>()->getTestModeNoBuilderUnit()),
   runNumber_(edm::Service<evf::EvFDaqDirector>()->getRunNumber()),
-  buInputDir_(edm::Service<evf::EvFDaqDirector>()->buBaseDir()),
   fuOutputDir_(edm::Service<evf::EvFDaqDirector>()->fuBaseDir()),
   daqProvenanceHelper_(edm::TypeID(typeid(FEDRawDataCollection))),
   fileStream_(0),
   eventID_(),
-  currentLumiSection_(0),
   nextIndex_(0),
   currentInputEventCount_(0),
-  eorFileSeen_(false),
   dataBuffer_(new unsigned char[1024 * 1024 * eventChunkSize_]),
   bufferCursor_(dataBuffer_),
   bufferLeft_(0)
@@ -62,13 +59,12 @@ FedRawDataInputSource::FedRawDataInputSource(edm::ParameterSet const& pset,
                                         << testModeNoBuilderUnit_ << ", read-ahead chunk size: " << eventChunkSize_
                                         << " on host " << thishost;
 
-  buWorkingDir_ = buInputDir_ / thishost;
-  boost::filesystem::create_directories(buWorkingDir_);
-
   daqProvenanceHelper_.daqInit(productRegistryUpdate(), processHistoryRegistryForUpdate());
   setNewRun();
   setRunAuxiliary(new edm::RunAuxiliary(runNumber_, edm::Timestamp::beginOfTime(),
 					edm::Timestamp::invalidTimestamp()));
+
+  createLumiBlock(1);
 }
 
 FedRawDataInputSource::~FedRawDataInputSource()
@@ -88,7 +84,8 @@ bool FedRawDataInputSource::checkNextEvent()
     return false;
   }
   else if(eventAvailable == 0) {
-    edm::LogInfo("FedRawDataInputSource") << "No Event files at this time, but a new lumisection was detected : " << currentLumiSection_;
+    edm::LogInfo("FedRawDataInputSource") << "No Event files at this time, but a new lumisection was detected : "
+                                          << luminosityBlockAuxiliary()->luminosityBlock();
     
     return true;
   }
@@ -100,7 +97,7 @@ bool FedRawDataInputSource::checkNextEvent()
 
     eventID_ = edm::EventID(
                             event_->run(),
-                            currentLumiSection_,
+                            luminosityBlockAuxiliary()->luminosityBlock(),
                             event_->event());
     
     setEventCached();
@@ -109,40 +106,38 @@ bool FedRawDataInputSource::checkNextEvent()
   }
 }
 
-void FedRawDataInputSource::maybeOpenNewLumiSection(const uint32_t lumiSection)
+void FedRawDataInputSource::maybeOpenNewLumiSection(const uint32_t newLumiSection)
 {
-  if (!luminosityBlockAuxiliary()
-    || luminosityBlockAuxiliary()->luminosityBlock() != lumiSection) {
-
-    if ( currentLumiSection_ > 0 ) {
-      const string fuEoLS =
-        edm::Service<evf::EvFDaqDirector>()->getEoLSFilePathOnFU(currentLumiSection_);
-      struct stat buf;
-      bool found = (stat(fuEoLS.c_str(), &buf) == 0);
-      if ( !found ) {
-        int eol_fd = open(fuEoLS.c_str(), O_RDWR|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
-        close(eol_fd);
-      }
+  if (luminosityBlockAuxiliary()->luminosityBlock() < newLumiSection) {
+    const string fuEoLS =
+      edm::Service<evf::EvFDaqDirector>()->getEoLSFilePathOnFU(luminosityBlockAuxiliary()->luminosityBlock());
+    struct stat buf;
+    bool found = (stat(fuEoLS.c_str(), &buf) == 0);
+    if ( !found ) {
+      int eol_fd = open(fuEoLS.c_str(), O_RDWR|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+      close(eol_fd);
     }
 
-    currentLumiSection_ = lumiSection;
-
-    resetLuminosityBlockAuxiliary();
-
-    timeval tv;
-    gettimeofday(&tv, 0);
-    const edm::Timestamp lsopentime( (unsigned long long) tv.tv_sec * 1000000 + (unsigned long long) tv.tv_usec );
-
-    edm::LuminosityBlockAuxiliary* luminosityBlockAuxiliary =
-      new edm::LuminosityBlockAuxiliary(
-        runAuxiliary()->run(),
-        lumiSection, lsopentime,
-        edm::Timestamp::invalidTimestamp());
-
-    setLuminosityBlockAuxiliary(luminosityBlockAuxiliary);
-
-    edm::LogInfo("FedRawDataInputSource") << "New lumi section " << lumiSection << " opened";
+    createLumiBlock(newLumiSection);
   }
+}
+
+void FedRawDataInputSource::createLumiBlock(const uint32_t lumiSection)
+{
+  resetLuminosityBlockAuxiliary();
+
+  timeval tv;
+  gettimeofday(&tv, 0);
+  const edm::Timestamp lsopentime( (unsigned long long) tv.tv_sec * 1000000 + (unsigned long long) tv.tv_usec );
+
+  edm::LuminosityBlockAuxiliary* luminosityBlockAuxiliary =
+    new edm::LuminosityBlockAuxiliary(runAuxiliary()->run(),
+                                      lumiSection, lsopentime,
+                                      edm::Timestamp::invalidTimestamp());
+
+  setLuminosityBlockAuxiliary(luminosityBlockAuxiliary);
+
+  edm::LogInfo("FedRawDataInputSource") << "New lumi section " << lumiSection << " opened";  
 }
 
 int FedRawDataInputSource::cacheNextEvent()
@@ -308,9 +303,11 @@ int FedRawDataInputSource::searchForNextFile()
     (evf::FastMonitoringService*) (edm::Service<evf::MicroStateService>().operator->());
   fms->startedLookingForFile();
 
+  uint32_t currentLumiSection = luminosityBlockAuxiliary()->luminosityBlock();
+
   do {
     const std::string nextJsonFile =
-      edm::Service<evf::EvFDaqDirector>()->getOpenJsonFilePath(currentLumiSection_,nextIndex_);
+      edm::Service<evf::EvFDaqDirector>()->getJsonFilePath(currentLumiSection,nextIndex_);
 
     struct stat buf;
     const bool jsonExists = (stat(nextJsonFile.c_str(), &buf) == 0);
@@ -318,13 +315,14 @@ int FedRawDataInputSource::searchForNextFile()
     if (jsonExists) {
       // Try to rename dat file
       try {
-        const boost::filesystem::path nextRawFile =
-          edm::Service<evf::EvFDaqDirector>()->getOpenRawFilePath(currentLumiSection_,nextIndex_);
-        const boost::filesystem::path myRawFile = buWorkingDir_ / nextRawFile.filename();
+        const std::string nextRawFile =
+          edm::Service<evf::EvFDaqDirector>()->getRawFilePath(currentLumiSection,nextIndex_);
+        const std::string myRawFile =
+          edm::Service<evf::EvFDaqDirector>()->getWorkingRawFilePath(currentLumiSection,nextIndex_);
         boost::filesystem::rename(nextRawFile,myRawFile);
         edm::LogInfo("FedRawDataInputSource") << "Grabbed file " << nextRawFile
                                               << " as " << myRawFile;
-        openDataFile(myRawFile.string());
+        openDataFile(myRawFile);
         fms->stoppedLookingForFile();
         assert( grabNextJsonFile(nextJsonFile) );
         retval = 100;
@@ -341,24 +339,34 @@ int FedRawDataInputSource::searchForNextFile()
     else {
       // check if there's an EoLS file for the current LS
       const std::string eolsFile =
-        edm::Service<evf::EvFDaqDirector>()->getEoLSFilePathOnBU(currentLumiSection_);
+        edm::Service<evf::EvFDaqDirector>()->getEoLSFilePathOnBU(currentLumiSection);
 
       struct stat buf;
       const bool eolsExists = (stat(eolsFile.c_str(), &buf) == 0);
 
       if (eolsExists) {
+        ++currentLumiSection;
         if (getLSFromFilename_) {
-          maybeOpenNewLumiSection(currentLumiSection_+1);
-        }
-        else {
-          ++currentLumiSection_;
+          maybeOpenNewLumiSection(currentLumiSection);
         }
         nextIndex_ = 0;
         retval = 1;
       }
       else {
-        edm::LogInfo("FedRawDataInputSource") << "No file for me... sleep and try again..." << std::endl;
-        usleep(100000);
+        // check if there's an EoR file
+        const std::string eorFile =
+          edm::Service<evf::EvFDaqDirector>()->getEoRFilePath();
+
+        struct stat buf;
+        const bool eorExists = (stat(eorFile.c_str(), &buf) == 0);
+
+        if (eorExists) {
+          retval = 0;
+        }
+        else {
+          edm::LogInfo("FedRawDataInputSource") << "No file for me... sleep and try again..." << std::endl;
+          usleep(100000);
+        }
       }
     }
   } while ( retval < 0 );

@@ -42,8 +42,9 @@ namespace evf{
       std::string findHighestRunDirStem();
       unsigned int findHighestRun(){return dirManager_.findHighestRun();}
       std::string getRawFilePath(const unsigned int ls, const unsigned int index) const;
+      std::string getWorkingRawFilePath(const unsigned int ls, const unsigned int index) const;
+      std::string getJsonFilePath(const unsigned int ls, const unsigned int index) const;
       std::string getOpenRawFilePath(const unsigned int ls, const unsigned int index) const;
-      std::string getOpenJsonFilePath(const unsigned int ls, const unsigned int index) const;
       std::string getOpenDatFilePath(const unsigned int ls, std::string const& stream) const;
       std::string getOutputJsonFilePath(const unsigned int ls, std::string const& stream) const;
       std::string getMergedDatFilePath(const unsigned int ls, std::string const& stream) const;
@@ -99,6 +100,7 @@ namespace evf{
       unsigned int run_;
 
       std::string hostname_;
+      std::string pid_string_;
       std::string run_string_;
       std::string run_dir_;
       std::string bu_run_dir_;

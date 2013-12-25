@@ -78,9 +78,13 @@ namespace evf {
     reg.watchPreBeginRun(this, &EvFDaqDirector::preBeginRun);
     reg.watchPostEndRun(this, &EvFDaqDirector::postEndRun);
 
-    std::stringstream ss;
-    ss << "run" << std::setfill('0') << std::setw(6) << run_;
-    run_string_ = ss.str();
+    std::ostringstream pid_oss;
+    pid_oss << "_pid" << std::setfill('0') << std::setw(5) << getpid();
+    pid_string_ = pid_oss.str();
+
+    std::ostringstream run_oss;
+    run_oss << "run" << std::setfill('0') << std::setw(6) << run_;
+    run_string_ = run_oss.str();
     run_dir_ = base_dir_+"/"+run_string_;
 
     //save hostname for later 
@@ -254,12 +258,16 @@ namespace evf {
     return bu_run_dir_ + "/" + inputFileNameStem(ls, index) + ".raw";
   }
 
-  std::string EvFDaqDirector::getOpenRawFilePath(const unsigned int ls, const unsigned int index) const {
-    return bu_run_dir_ + "/open/" + inputFileNameStem(ls, index) + ".raw";
+  std::string EvFDaqDirector::getJsonFilePath(const unsigned int ls, const unsigned int index) const {
+    return bu_run_dir_ + "/" + inputFileNameStem(ls, index) + ".jsn";
   }
 
-  std::string EvFDaqDirector::getOpenJsonFilePath(const unsigned int ls, const unsigned int index) const {
-    return bu_run_dir_ + "/open/" + inputFileNameStem(ls, index) + ".jsn";
+  std::string EvFDaqDirector::getWorkingRawFilePath(const unsigned int ls, const unsigned int index) const {
+    return bu_run_dir_ + "/" + inputFileNameStem(ls, index) + "_" + hostname_ + pid_string_ + ".raw";
+  }
+
+  std::string EvFDaqDirector::getOpenRawFilePath(const unsigned int ls, const unsigned int index) const {
+    return bu_run_dir_ + "/open/" + inputFileNameStem(ls, index) + ".raw";
   }
 
   std::string EvFDaqDirector::getOpenDatFilePath(const unsigned int ls, std::string const& stream) const {
@@ -639,7 +647,7 @@ namespace evf {
     ss << run_string_
        << "_ls" << std::setfill('0') << std::setw(4) << ls
        << "_" << stream
-       << "_pid" << std::setfill('0') << std::setw(5) << getpid();
+       << pid_string_;
     return ss.str();
   }
 
@@ -656,7 +664,7 @@ namespace evf {
     std::stringstream ss;
     ss << run_string_
        << "_" << stream
-       << "_pid" << std::setfill('0') << std::setw(5) << getpid()
+       << pid_string_
        << ".ini";
     return ss.str();
   }
