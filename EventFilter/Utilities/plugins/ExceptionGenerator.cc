@@ -223,9 +223,18 @@ namespace evf{
 	      }
 	      break;
 	    case 13:
+              {
 	      void *vp = malloc(1024);
 	      memset((char *)vp - 32, 0, 1024);
 	      free(vp);
+              }
+              break;
+            case 14:
+              {
+                const unsigned int sleepTime =
+                  static_cast<unsigned int>(timingHisto_->GetRandom() / timingHisto_->GetMean() * intqualifier_ + 0.5);
+                ::usleep(sleepTime*1000);
+              }
 	      break;
 	    }
 	}
