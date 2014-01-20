@@ -325,6 +325,7 @@ int FedRawDataInputSource::searchForNextFile()
         openDataFile(myRawFile);
         fms->stoppedLookingForFile();
         assert( grabNextJsonFile(nextJsonFile) );
+        myJsonFiles_.push_back(nextJsonFile);
         retval = 100;
       }
       catch(boost::filesystem::filesystem_error) {
@@ -345,6 +346,11 @@ int FedRawDataInputSource::searchForNextFile()
       const bool eolsExists = (stat(eolsFile.c_str(), &buf) == 0);
 
       if (eolsExists) {
+
+        for (auto file : myJsonFiles_)
+          boost::filesystem::remove(file);
+        myJsonFiles_.clear();
+
         ++currentLumiSection;
         if (getLSFromFilename_) {
           maybeOpenNewLumiSection(currentLumiSection);

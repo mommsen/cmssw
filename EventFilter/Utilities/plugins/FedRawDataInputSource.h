@@ -73,6 +73,8 @@ private:
   unsigned int nextIndex_;
   unsigned int currentInputEventCount_;
 
+  std::vector<std::string> myJsonFiles_;
+
   unsigned char *dataBuffer_; // temporarily hold multiple event data
   unsigned char *bufferCursor_;
   uint32_t bufferLeft_;
